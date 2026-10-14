@@ -70,7 +70,7 @@ table{width:100%;border-collapse:collapse}th{text-align:left;color:var(--mu);fon
 td{padding:9px 14px;border-bottom:1px solid #1a1f2d;white-space:nowrap}tr.r:hover{background:var(--rs)}
 .nm{display:flex;align-items:center;gap:10px;font-weight:600;cursor:pointer;max-width:46vw;overflow:hidden;text-overflow:ellipsis}.nm svg{width:18px;height:18px;flex:none;stroke:var(--mu);fill:none;stroke-width:2}.nm.d svg{stroke:var(--ac2);fill:#22d3ee22}
 .act{display:flex;gap:4px;justify-content:flex-end}.act button{background:none;color:var(--mu);padding:5px 8px;border-radius:7px;font-size:12px;font-weight:600}.act button:hover{background:var(--ln);color:#fff}.act .x:hover{color:var(--bd)}
-.tw{overflow-x:auto}
+.tw{overflow-x:auto}.ck{width:18px;height:18px;padding:0;accent-color:var(--ac);cursor:pointer;vertical-align:middle}tr.sel{background:#7c5cff1c}
 /* modal */
 .md{position:fixed;inset:0;z-index:40;background:#000b;display:grid;place-items:center;padding:16px;backdrop-filter:blur(4px)}
 .md>div{background:var(--sf);border:1px solid var(--ln);border-radius:16px;width:min(960px,100%);max-height:92vh;display:flex;flex-direction:column}
@@ -105,11 +105,11 @@ td{padding:9px 14px;border-bottom:1px solid #1a1f2d;white-space:nowrap}tr.r:hove
 </section>
 
 <section id="p-files" class="hide">
-<div class="bar2"><div class="crumbs" id="cr"></div><div class="pw"><button class="btn" id="nf">New file</button><button class="btn" id="nd">New folder</button><button class="btn" id="rf">Refresh</button></div></div>
+<div class="bar2"><div class="crumbs" id="cr"></div><div class="pw"><button class="btn bd hide" id="dl">Delete selected</button><button class="btn" id="sl">Select all</button><button class="btn" id="nf">New file</button><button class="btn" id="nd">New folder</button><button class="btn" id="rf">Refresh</button></div></div>
 <div id="drop"><div class="ic"><svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg></div><b>Drop files or folders here</b><p>Upload a project .zip and extract it on arrival, or add single files. Up to 600 MB.</p>
 <div class="row"><button class="btn pri" id="bf">Choose files</button><button class="btn" id="bd2">Choose folder</button><label class="sw" style="gap:8px"><span style="color:var(--mu)">Extract .zip</span><input type="checkbox" id="ex" checked><i></i></label></div>
 <input type="file" id="fi" multiple class="hide"><input type="file" id="fd" webkitdirectory class="hide"><div class="up" id="up"></div></div>
-<div class="card tw" style="padding:0"><table><thead><tr><th>Name</th><th>Size</th><th>Modified</th><th></th></tr></thead><tbody id="fb"></tbody></table></div>
+<div class="card tw" style="padding:0"><table><thead><tr><th style="width:40px"><input type="checkbox" id="sa" class="ck" title="Select all"></th><th>Name</th><th>Size</th><th>Modified</th><th></th></tr></thead><tbody id="fb"></tbody></table></div>
 </section>
 
 <section id="p-startup" class="hide">
@@ -162,10 +162,16 @@ function connect(){ws=new WebSocket((location.protocol==='https:'?'wss://':'ws:/
 const sz=n=>n<1024?n+' B':n<1048576?(n/1024).toFixed(1)+' KB':(n/1048576).toFixed(1)+' MB';
 const ICON={d:'<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>',f:'<svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8zM14 3v5h5"/></svg>'};
 const join=(a,b)=>a?a+'/'+b:b;
-async function ls(){const l=await api('files?path='+encodeURIComponent(cwd));const parts=cwd?cwd.split('/'):[];
+let sel=new Set();
+function upSel(){const rc=$$('.rc');rc.forEach(c=>{c.checked=sel.has(c.dataset.n);c.closest('tr').classList.toggle('sel',c.checked)});const all=rc.length&&sel.size===rc.length;$('#sa').checked=!!all;$('#sl').textContent=all?'Deselect all':'Select all';$('#dl').classList.toggle('hide',!sel.size);$('#dl').textContent='Delete selected ('+sel.size+')'}
+function toggleAll(){const rc=$$('.rc');if(sel.size===rc.length)sel.clear();else rc.forEach(c=>sel.add(c.dataset.n));upSel()}
+$('#sa').onchange=toggleAll;$('#sl').onclick=toggleAll;
+$('#fb').addEventListener('change',e=>{const c=e.target;if(c.classList.contains('rc')){c.checked?sel.add(c.dataset.n):sel.delete(c.dataset.n);upSel()}});
+$('#dl').onclick=async()=>{const n=sel.size;if(!n||!confirm('Delete '+n+' selected item'+(n>1?'s':'')+'? This cannot be undone.'))return;await api('delete',{method:'POST',body:{paths:[...sel].map(x=>join(cwd,x))}});toast('Deleted '+n+' item'+(n>1?'s':''));ls()};
+async function ls(){sel=new Set();const l=await api('files?path='+encodeURIComponent(cwd));const parts=cwd?cwd.split('/'):[];
  $('#cr').innerHTML='<button data-d="">home</button>'+parts.map((p,i)=>`<span>/</span><button data-d="${esc(parts.slice(0,i+1).join('/'))}">${esc(p)}</button>`).join('');
  $$('#cr button').forEach(b=>b.onclick=()=>{cwd=b.dataset.d;ls()});
- $('#fb').innerHTML=(cwd?'<tr class="r"><td colspan="4"><div class="nm d" data-up="1">'+ICON.d+'..</div></td></tr>':'')+(l.length?l.map(f=>`<tr class="r"><td><div class="nm ${f.dir?'d':''}" data-n="${esc(f.name)}" data-dir="${f.dir?1:''}">${f.dir?ICON.d:ICON.f}${esc(f.name)}</div></td><td>${f.dir?'—':sz(f.size)}</td><td>${new Date(f.mtime).toLocaleString()}</td><td><div class="act">${!f.dir?`<button data-x="edit" data-n="${esc(f.name)}">Edit</button><button data-x="dl" data-n="${esc(f.name)}">Download</button>`:''}${/\.zip$/i.test(f.name)?`<button data-x="unzip" data-n="${esc(f.name)}">Unzip</button>`:''}<button data-x="ren" data-n="${esc(f.name)}">Rename</button><button class="x" data-x="del" data-n="${esc(f.name)}">Delete</button></div></td></tr>`).join(''):'<tr><td colspan="4" style="text-align:center;color:var(--mu);padding:30px">This folder is empty. Drop files above to get started.</td></tr>')}
+ $('#fb').innerHTML=(cwd?'<tr class="r"><td></td><td colspan="4"><div class="nm d" data-up="1">'+ICON.d+'..</div></td></tr>':'')+(l.length?l.map(f=>`<tr class="r"><td><input type="checkbox" class="ck rc" data-n="${esc(f.name)}"></td><td><div class="nm ${f.dir?'d':''}" data-n="${esc(f.name)}" data-dir="${f.dir?1:''}">${f.dir?ICON.d:ICON.f}${esc(f.name)}</div></td><td>${f.dir?'—':sz(f.size)}</td><td>${new Date(f.mtime).toLocaleString()}</td><td><div class="act">${!f.dir?`<button data-x="edit" data-n="${esc(f.name)}">Edit</button><button data-x="dl" data-n="${esc(f.name)}">Download</button>`:''}${/\.zip$/i.test(f.name)?`<button data-x="unzip" data-n="${esc(f.name)}">Unzip</button>`:''}<button data-x="ren" data-n="${esc(f.name)}">Rename</button><button class="x" data-x="del" data-n="${esc(f.name)}">Delete</button></div></td></tr>`).join(''):'<tr><td colspan="5" style="text-align:center;color:var(--mu);padding:30px">This folder is empty. Drop files above to get started.</td></tr>');upSel()}
 $('#fb').onclick=async e=>{const u=e.target.closest('[data-up]');if(u){cwd=cwd.split('/').slice(0,-1).join('/');return ls()}
  const n=e.target.closest('.nm');if(n&&!n.dataset.up){const p=join(cwd,n.dataset.n);if(n.dataset.dir){cwd=p;return ls()}return edit(p)}
  const b=e.target.closest('[data-x]');if(!b)return;const p=join(cwd,b.dataset.n),x=b.dataset.x;
