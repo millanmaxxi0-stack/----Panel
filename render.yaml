@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: shadow-basit-panel
+    runtime: node
+    buildCommand: npm install --no-audit --no-fund
+    startCommand: npm start
+    envVars:
+      - key: PANEL_PASSWORD
+        sync: false
+      - key: MEMORY_LIMIT_MB
+        value: "512"
