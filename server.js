@@ -35,6 +35,10 @@ const nodeBin = v => (v && v !== 'system') ? path.join(NODES, 'v' + v, 'node_mod
 const buildEnv = cfg => {
   const env = { ...process.env, FORCE_COLOR: '1', npm_config_update_notifier: 'false', npm_config_audit: 'false', npm_config_fund: 'false' };
   delete env.PANEL_PASSWORD; delete env.PORT;
+  // Git dependencies (github:user/repo, git+ssh://...) normally try SSH, which has no keys here. Force HTTPS instead.
+  Object.assign(env, { GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_COUNT: '2',
+    GIT_CONFIG_KEY_0: 'url.https://github.com/.insteadOf', GIT_CONFIG_VALUE_0: 'ssh://git@github.com/',
+    GIT_CONFIG_KEY_1: 'url.https://github.com/.insteadOf', GIT_CONFIG_VALUE_1: 'git@github.com:' });
   cfg.vars.forEach(v => { if (v.key) env[v.key] = v.value; });
   const b = nodeBin(cfg.node);
   if (b && fs.existsSync(b)) env.PATH = b + path.delimiter + env.PATH;
