@@ -33,7 +33,7 @@ const sys = m => log(`\x1b[36m[SH4D0W] ${m}\x1b[0m\r\n`);
 
 const nodeBin = v => (v && v !== 'system') ? path.join(NODES, 'v' + v, 'node_modules', 'node', 'bin') : null;
 const buildEnv = cfg => {
-  const env = { ...process.env, FORCE_COLOR: '1', npm_config_update_notifier: 'false' };
+  const env = { ...process.env, FORCE_COLOR: '1', npm_config_update_notifier: 'false', npm_config_audit: 'false', npm_config_fund: 'false' };
   delete env.PANEL_PASSWORD; delete env.PORT;
   cfg.vars.forEach(v => { if (v.key) env[v.key] = v.value; });
   const b = nodeBin(cfg.node);
@@ -94,15 +94,15 @@ function stop(sig) {
   if (sig !== 'SIGKILL') setTimeout(() => { if (proc && proc.pid === pid) try { process.kill(-pid, 'SIGKILL'); } catch {} }, 10000);
 }
 
-const INSTALL = 'npm install --no-audit --no-fund --no-progress --legacy-peer-deps';
+const INSTALL = 'npm install --no-audit --no-fund --no-progress';
 async function install() {
   if (proc || status !== 'offline') return sys('Stop the server before running install.');
   const cfg = loadCfg(); setStatus('installing');
   if (!(await ensureNode(cfg))) return setStatus('offline');
   if (!fs.existsSync(path.join(ROOT, 'package.json'))) { sys('No package.json found in the file manager.'); return setStatus('offline'); }
   log(`\x1b[32mcontainer@shadow~ \x1b[0mnpm install\r\n`);
-  // 3 stages: normal -> clean cache + retry -> force. Prevents random install failures.
-  const cmd = `(${INSTALL} || (echo '[retry] cleaning npm cache' && npm cache clean --force && ${INSTALL} --prefer-online) || (echo '[retry] forcing install' && ${INSTALL} --force --prefer-online))`;
+  // Stages: normal (installs peer deps) -> --force (accepts conflicts but still installs peers) -> legacy-peer-deps (last resort).
+  const cmd = `(${INSTALL} || (echo '[retry] forcing install (peer dependencies are still installed)' && ${INSTALL} --force --prefer-online) || (echo '[retry] cleaning cache + legacy peer deps' && npm cache clean --force && ${INSTALL} --legacy-peer-deps --prefer-online))`;
   run(cmd, buildEnv(cfg), 'install', code => { sys(code === 0 ? 'Install finished successfully.' : `Install failed (code ${code}).`); setStatus('offline'); });
 }
 
@@ -144,6 +144,27 @@ app.use('/api', auth);
 const safe = p => { const r = path.resolve(ROOT, '.' + path.sep + String(p || '')); if (r !== ROOT && !r.startsWith(ROOT + path.sep)) throw new Error('Invalid path'); return r; };
 const wrap = fn => (req, res) => { try { fn(req, res); } catch (e) { res.status(400).json({ error: e.message }); } };
 
+/* Extract a zip; if everything sits inside one wrapper folder, flatten it so package.json lands in the root. */
+function extractZip(zipFile, destDir) {
+  const zip = new AdmZip(zipFile);
+  const entries = zip.getEntries().filter(e => !/^__MACOSX\//.test(e.entryName) && !/(^|\/)\.DS_Store$/.test(e.entryName));
+  const names = entries.map(e => e.entryName.replace(/\\/g, '/').replace(/^\/+/, ''));
+  let prefix = '';
+  for (let i = 0; i < 3; i++) {
+    const rest = names.map(n => n.slice(prefix.length)).filter(Boolean);
+    const tops = new Set(rest.map(n => n.split('/')[0]));
+    if (rest.length && tops.size === 1 && rest.every(n => n.includes('/'))) prefix += [...tops][0] + '/'; else break;
+  }
+  entries.forEach((e, i) => {
+    const rel = names[i].slice(prefix.length); if (!rel) return;
+    const target = path.resolve(destDir, rel);
+    if (target !== destDir && !target.startsWith(destDir + path.sep)) return; // zip-slip protection
+    if (e.isDirectory) fs.mkdirSync(target, { recursive: true });
+    else { fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, e.getData()); }
+  });
+  return prefix;
+}
+
 app.get('/api/config', (_, r) => r.json(loadCfg()));
 app.put('/api/config', wrap((req, res) => {
   const b = req.body, c = loadCfg();
@@ -171,7 +192,7 @@ app.put('/api/file', wrap((req, res) => { const f = safe(req.body.path); fs.mkdi
 app.post('/api/mkdir', wrap((req, res) => { fs.mkdirSync(safe(req.body.path), { recursive: true }); res.json({ ok: true }); }));
 app.post('/api/rename', wrap((req, res) => { fs.renameSync(safe(req.body.from), safe(req.body.to)); res.json({ ok: true }); }));
 app.post('/api/delete', wrap((req, res) => { (req.body.paths || []).forEach(p => { const f = safe(p); if (f !== ROOT) fs.rmSync(f, { recursive: true, force: true }); }); res.json({ ok: true }); }));
-app.post('/api/unzip', wrap((req, res) => { const f = safe(req.body.path); new AdmZip(f).extractAllTo(path.dirname(f), true); res.json({ ok: true }); }));
+app.post('/api/unzip', wrap((req, res) => { const f = safe(req.body.path); extractZip(f, path.dirname(f)); res.json({ ok: true }); }));
 app.get('/api/download', wrap((req, res) => { const f = safe(req.query.path); if (fs.statSync(f).isDirectory()) throw new Error('Cannot download a folder'); res.download(f); }));
 
 const upload = multer({ dest: TMP, limits: { fileSize: 600 * 1048576 } });
@@ -183,7 +204,7 @@ app.post('/api/upload', upload.any(), (req, res) => {
       const dest = path.resolve(base, rel);
       if (dest !== ROOT && !dest.startsWith(ROOT + path.sep)) throw new Error('Invalid path');
       fs.mkdirSync(path.dirname(dest), { recursive: true });
-      if (req.body.extract === '1' && /\.zip$/i.test(rel)) { new AdmZip(f.path).extractAllTo(path.dirname(dest), true); fs.rmSync(f.path, { force: true }); }
+      if (req.body.extract === '1' && /\.zip$/i.test(rel)) { extractZip(f.path, path.dirname(dest)); fs.rmSync(f.path, { force: true }); }
       else { try { fs.renameSync(f.path, dest); } catch { fs.copyFileSync(f.path, dest); fs.rmSync(f.path, { force: true }); } }
       n++;
     });
